@@ -1,0 +1,17 @@
+# dsh-desktop-browser: auto-open the Web UI in a browser with no address bar.
+# Insert this into your dsh-web-app or dsh-headless profile composition.
+
+- insert:
+    - id: desktop-browser
+      name: '@deepseek-ai/dsh-desktop-browser'
+      inject: [webServer]
+      config:
+        # Auto-resolved from the webserver via inject
+        url: http://127.0.0.1:3080
+        width: 1400
+        height: 900
+        positionX: auto
+        positionY: auto
+        disableExtensions: true
+        openDelayMs: 500
+        minimize: false
