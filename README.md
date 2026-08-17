@@ -1,19 +1,35 @@
 # @deepseek-ai/dsh-desktop-browser
 
-A Cordis plugin for DeepSeek Harness that opens the Web UI in a browser window
-with no address bar (`--app` mode), giving dsh a native-app feel.
+Opens the dsh Web UI in a browser window with **no address bar**, giving it a native-app feel.
 
 ## Features
 
 - **Auto browser detection** — finds Chrome, Edge, Chromium, or Safari on Windows/macOS/Linux
-- **Address bar hidden** — uses Chromium's `--app=<url>` flag for a clean window
-- **Auto URL resolution** — reads the webserver's host/port from `ctx.webServer`
+- **Address bar hidden** — uses Chromium's `--app=<url>` flag
+- **Auto URL resolution** — reads host/port from the webserver
 - **Window geometry** — configurable size and position (auto-center supported)
-- **Automatic cleanup** — closes browser on shutdown via `ctx.effect()`
+- **Automatic cleanup** — closes browser when dsh shuts down
 
-## Usage
+## Quick Start
 
-### In a `cordis.patch.yml` overlay
+```bash
+# 1. Install the plugin into your web profile
+dsh plugin --profile web add Mby159/dsh-desktop-browser
+
+# 2. Start dsh — browser opens automatically!
+dsh web
+```
+
+That's it! No extra configuration needed.
+
+## Requirements
+
+- A Chromium-based browser (Chrome, Edge, Chromium) or Safari
+- DeepSeek Harness `web` profile
+
+## Configuration (optional)
+
+The plugin works with zero config. To customize, edit your profile's `cordis.patch.yml`:
 
 ```yaml
 - insert:
@@ -30,17 +46,6 @@ with no address bar (`--app` mode), giving dsh a native-app feel.
         minimize: false
 ```
 
-### Apply to your dsh profile
-
-```bash
-# Via command-line --patch
-dsh --profile web --patch ./packages/desktop-browser/cordis.patch.yml
-
-# Or add it to your ~/.dsh/cordis.patch.yml
-```
-
-## Configuration
-
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `url` | string | auto | Override the URL to open |
@@ -55,14 +60,9 @@ dsh --profile web --patch ./packages/desktop-browser/cordis.patch.yml
 
 ## API
 
-The plugin registers `ctx.desktopBrowser` with:
+The plugin registers `ctx.desktopBrowser`:
 
 - `url` — the resolved URL
 - `running` — whether the browser is open
 - `open()` — open the browser window
 - `close()` — close the browser window
-
-## Requirements
-
-- A Chromium-based browser (Chrome, Edge, Chromium) or Safari (fallback)
-- DeepSeek Harness `web` profile running (provides `webServer` service)
