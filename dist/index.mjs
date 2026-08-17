@@ -11,8 +11,8 @@ import z from "@deepseek-ai/schemastery";
 * @module @deepseek-ai/dsh-desktop-browser
 */
 const Config = z.object({
-	url: z.string().optional(),
-	browser: z.string().optional(),
+	url: z.string(),
+	browser: z.string(),
 	width: z.natural().default(1400),
 	height: z.natural().default(900),
 	positionX: z.union([z.number(), z.const("auto")]).default("auto"),
