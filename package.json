@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-desktop-browser",
   "description": "Host plugin: opens the dsh Web UI in a browser window with no address bar (--app mode)",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publishConfig": {
     "access": "public"
   },
