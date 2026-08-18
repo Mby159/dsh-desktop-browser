@@ -6,7 +6,7 @@
  */
 
 import { execSync, spawn } from 'node:child_process'
-import { existsSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs'
 import { homedir, platform } from 'node:os'
 import { dirname, join } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
@@ -202,10 +202,22 @@ function patchFrontend(webserver: { tapIndex: (t: (html: string) => string) => (
 /*  Desktop shortcut                                                   */
 /* ------------------------------------------------------------------ */
 
+function findIconPath(): { path: string; ext: string } | undefined {
+  const candidates = [
+    join(homedir(), '.dsh/profiles/web/node_modules/@deepseek-ai/dsh-web-frontend/dist/favicon.ico'),
+    join(homedir(), '.dsh/profiles/web/node_modules/@deepseek-ai/dsh-web-frontend/dist/favicon.svg'),
+    join(homedir(), '.dsh/profiles/web/node_modules/@deepseek-ai/dsh-web-frontend/dist/favicon.png'),
+    join(homedir(), '.dsh/dsh-icon.ico'),
+  ]
+  for (const p of candidates) if (existsSync(p)) return { path: p, ext: p.split('.').pop() ?? '' }
+  return undefined
+}
+
 function createWindowsShortcut(
   shortcutPath: string,
   targetPath: string,
   workingDir: string,
+  iconPath?: string,
 ): void {
   const dir = dirname(targetPath)
   const ps1Path = join(dir, 'create-shortcut.ps1')
@@ -214,8 +226,9 @@ function createWindowsShortcut(
     `$lnk = $sh.CreateShortcut("${shortcutPath}")`,
     `$lnk.TargetPath = "${targetPath}"`,
     `$lnk.WorkingDirectory = "${workingDir}"`,
+    iconPath ? `$lnk.IconLocation = "${iconPath}"` : '',
     `$lnk.Save()`,
-  ].join('\n')
+  ].filter(Boolean).join('\n')
   try {
     writeFileSync(ps1Path, ps1Content)
     execSync(`powershell -ExecutionPolicy Bypass -File "${ps1Path}"`, { stdio: 'ignore' })
@@ -236,10 +249,21 @@ function createDesktopShortcut(config: ResolvedConfig): void {
     try { writeFileSync(launcherPath, '@echo off\r\nnpx @deepseek-ai/dsh web\r\n') } catch { return }
   }
 
+  const icon = findIconPath()
+  let iconPath = ''
+  if (icon && icon.ext === 'svg') {
+    // Copy SVG to .dsh for reference; ICO conversion happens at install time
+    iconPath = join(dshHome, 'dsh-icon.svg')
+    try { if (!existsSync(iconPath)) copyFileSync(icon.path, iconPath) } catch { iconPath = '' }
+  } else if (icon && icon.ext === 'ico') {
+    iconPath = join(dshHome, 'dsh-icon.ico')
+    try { if (!existsSync(iconPath)) copyFileSync(icon.path, iconPath) } catch { iconPath = '' }
+  }
+
   try {
     if (os === 'win32') {
       const shortcutPath = join(desktopDir, `${shortcutName}.lnk`)
-      if (!existsSync(shortcutPath)) createWindowsShortcut(shortcutPath, launcherPath, dshHome)
+      if (!existsSync(shortcutPath)) createWindowsShortcut(shortcutPath, launcherPath, dshHome, iconPath)
     } else if (os === 'darwin') {
       const cmdPath = join(desktopDir, `${shortcutName}.command`)
       if (!existsSync(cmdPath)) {

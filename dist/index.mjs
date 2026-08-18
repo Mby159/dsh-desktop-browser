@@ -1,5 +1,5 @@
 import { execSync, spawn } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, copyFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { Service } from "@deepseek-ai/cordis";
@@ -87,10 +87,19 @@ document.addEventListener("pagehide",function(){navigator.sendBeacon("${QUIT_ROU
 		return html.replace("</body>", `${script}</body>`);
 	});
 }
-function createWindowsShortcut(shortcutPath, targetPath, workingDir) {
+function findIconPath() {
+	const candidates = [
+		join(homedir(), ".dsh/profiles/web/node_modules/@deepseek-ai/dsh-web-frontend/dist/favicon.ico"),
+		join(homedir(), ".dsh/profiles/web/node_modules/@deepseek-ai/dsh-web-frontend/dist/favicon.svg"),
+		join(homedir(), ".dsh/dsh-icon.ico")
+	];
+	for (const p of candidates) if (existsSync(p)) return { path: p, ext: p.split(".").pop() ?? "" };
+	return void 0;
+}
+function createWindowsShortcut(shortcutPath, targetPath, workingDir, iconPath) {
 	const dir = dirname(targetPath);
 	const ps1Path = join(dir, "create-shortcut.ps1");
-	const ps1Content = [`$sh = New-Object -ComObject WScript.Shell`, `$lnk = $sh.CreateShortcut("${shortcutPath}")`, `$lnk.TargetPath = "${targetPath}"`, `$lnk.WorkingDirectory = "${workingDir}"`, `$lnk.Save()`].join("\n");
+	const ps1Content = [`$sh = New-Object -ComObject WScript.Shell`, `$lnk = $sh.CreateShortcut("${shortcutPath}")`, `$lnk.TargetPath = "${targetPath}"`, `$lnk.WorkingDirectory = "${workingDir}"`, iconPath ? `$lnk.IconLocation = "${iconPath}"` : "", `$lnk.Save()`].filter(Boolean).join("\n");
 	try { writeFileSync(ps1Path, ps1Content); execSync(`powershell -ExecutionPolicy Bypass -File "${ps1Path}"`, { stdio: "ignore" }); } catch {}
 }
 function createDesktopShortcut(config) {
@@ -101,10 +110,17 @@ function createDesktopShortcut(config) {
 	const shortcutName = config.shortcutName ?? "DeepSeek Harness";
 	const launcherPath = join(dshHome, "launch-dsh.cmd");
 	if (!existsSync(launcherPath)) { try { writeFileSync(launcherPath, "@echo off\r\nnpx @deepseek-ai/dsh web\r\n"); } catch { return; } }
+	const icon = findIconPath();
+	let iconPath = "";
+	if (icon && icon.ext === "svg") {
+		iconPath = join(dshHome, "dsh-icon.svg"); try { if (!existsSync(iconPath)) copyFileSync(icon.path, iconPath); } catch { iconPath = ""; }
+	} else if (icon && icon.ext === "ico") {
+		iconPath = join(dshHome, "dsh-icon.ico"); try { if (!existsSync(iconPath)) copyFileSync(icon.path, iconPath); } catch { iconPath = ""; }
+	}
 	try {
 		if (os === "win32") {
 			const shortcutPath = join(desktopDir, `${shortcutName}.lnk`);
-			if (!existsSync(shortcutPath)) createWindowsShortcut(shortcutPath, launcherPath, dshHome);
+			if (!existsSync(shortcutPath)) createWindowsShortcut(shortcutPath, launcherPath, dshHome, iconPath);
 		} else if (os === "darwin") {
 			const cmdPath = join(desktopDir, `${shortcutName}.command`);
 			if (!existsSync(cmdPath)) { writeFileSync(cmdPath, "#!/bin/bash\nnpx @deepseek-ai/dsh web\n"); execSync(`chmod +x "${cmdPath}"`, { stdio: "ignore" }); }
