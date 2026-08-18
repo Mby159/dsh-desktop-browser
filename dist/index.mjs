@@ -212,16 +212,14 @@ var DesktopBrowser = class extends Service {
 		if (chromiumPath) {
 			this.ctx.logger.info(`desktopBrowser: launching ${chromiumPath} with URL ${url}`);
 			this.browserProcess = spawn(chromiumPath, args, {
-				stdio: "ignore",
-				detached: true
+				stdio: "ignore"
 			});
 		} else {
 			const opener = platform() === "win32" ? "cmd" : platform() === "darwin" ? "open" : "xdg-open";
 			const openerArgs = platform() === "win32" ? ["/c", "start", "", url] : [url];
 			this.ctx.logger.warn(`desktopBrowser: no Chromium browser found, opening ${url} with default browser (will retain address bar)`);
 			this.browserProcess = spawn(opener, openerArgs, {
-				stdio: "ignore",
-				detached: true
+				stdio: "ignore"
 			});
 		}
 		this.browserProcess.on("error", (err) => {

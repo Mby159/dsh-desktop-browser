@@ -316,7 +316,6 @@ export class DesktopBrowser extends Service {
       this.ctx.logger.info(`desktopBrowser: launching ${chromiumPath} with URL ${url}`)
       this.browserProcess = spawn(chromiumPath, args, {
         stdio: 'ignore',
-        detached: true,
       })
     } else {
       const opener = platform() === 'win32' ? 'cmd' : platform() === 'darwin' ? 'open' : 'xdg-open'
@@ -326,7 +325,6 @@ export class DesktopBrowser extends Service {
       )
       this.browserProcess = spawn(opener, openerArgs, {
         stdio: 'ignore',
-        detached: true,
       })
     }
 
