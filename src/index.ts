@@ -177,7 +177,7 @@ const QUIT_SCRIPT_ID = '__dsh_db_quitscript__'
 const QUIT_ROUTE_PATH = '/api/desktop-browser/quit'
 const ALIVE_ROUTE_PATH = '/api/desktop-browser/alive'
 const HEARTBEAT_INTERVAL_MS = 5000
-const HEARTBEAT_TIMEOUT_MS = 30000
+const HEARTBEAT_TIMEOUT_MS = 15000
 
 /**
  * Inject a <script> that fires sendBeacon when the Web UI tab/page closes.
