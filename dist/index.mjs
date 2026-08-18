@@ -1,7 +1,7 @@
 import { execSync, spawn } from "node:child_process";
 import { existsSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Service } from "@deepseek-ai/cordis";
 import z from "@deepseek-ai/schemastery";
 //#region src/index.ts
@@ -88,7 +88,7 @@ document.addEventListener("pagehide",function(){navigator.sendBeacon("${QUIT_ROU
 	});
 }
 function createWindowsShortcut(shortcutPath, targetPath, workingDir) {
-	const dir = join(...targetPath.split("/").slice(0, -1));
+	const dir = dirname(targetPath);
 	const ps1Path = join(dir, "create-shortcut.ps1");
 	const ps1Content = [`$sh = New-Object -ComObject WScript.Shell`, `$lnk = $sh.CreateShortcut("${shortcutPath}")`, `$lnk.TargetPath = "${targetPath}"`, `$lnk.WorkingDirectory = "${workingDir}"`, `$lnk.Save()`].join("\n");
 	try { writeFileSync(ps1Path, ps1Content); execSync(`powershell -ExecutionPolicy Bypass -File "${ps1Path}"`, { stdio: "ignore" }); } catch {}

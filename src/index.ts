@@ -8,7 +8,7 @@
 import { execSync, spawn } from 'node:child_process'
 import { existsSync, writeFileSync } from 'node:fs'
 import { homedir, platform } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 
@@ -207,7 +207,7 @@ function createWindowsShortcut(
   targetPath: string,
   workingDir: string,
 ): void {
-  const dir = join(...targetPath.split('/').slice(0, -1))
+  const dir = dirname(targetPath)
   const ps1Path = join(dir, 'create-shortcut.ps1')
   const ps1Content = [
     `$sh = New-Object -ComObject WScript.Shell`,
