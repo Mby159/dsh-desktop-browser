@@ -193,11 +193,6 @@ function patchFrontend(webserver: { tapIndex: (t: (html: string) => string) => (
       document.addEventListener("pagehide", function(){
         navigator.sendBeacon("${QUIT_ROUTE_PATH}")
       })
-      document.addEventListener("visibilitychange", function(){
-        if (document.visibilityState === "hidden") {
-          navigator.sendBeacon("${QUIT_ROUTE_PATH}")
-        }
-      })
     </script>`
     return html.replace('</body>', `${script}</body>`)
   })

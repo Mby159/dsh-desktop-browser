@@ -83,7 +83,6 @@ function patchFrontend(webserver) {
 		const script = `<script id="${QUIT_SCRIPT_ID}">
 setInterval(function(){navigator.sendBeacon("${ALIVE_ROUTE_PATH}")},${HEARTBEAT_INTERVAL_MS})
 document.addEventListener("pagehide",function(){navigator.sendBeacon("${QUIT_ROUTE_PATH}")})
-document.addEventListener("visibilitychange",function(){if(document.visibilityState==="hidden"){navigator.sendBeacon("${QUIT_ROUTE_PATH}")}})
 </script>`;
 		return html.replace("</body>", `${script}</body>`);
 	});
