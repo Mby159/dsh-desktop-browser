@@ -15,7 +15,7 @@ import z from '@deepseek-ai/schemastery'
 declare module '@deepseek-ai/cordis' {
   interface Context {
     desktopBrowser: DesktopBrowser
-    webServer: { host?: string; port?: number }
+    // webServer augmented by @deepseek-ai/dsh-host-webserver
   }
 }
 
@@ -75,7 +75,6 @@ function findFirst(candidates: string[]): string | undefined {
   return undefined
 }
 
-/** Query Windows registry for the user's default HTTP handler. */
 function defaultBrowserWindows(): string | undefined {
   try {
     const match = execSync(
@@ -100,12 +99,10 @@ function defaultBrowserWindows(): string | undefined {
 
 function detectWindowsBrowsers(): BrowserEntry[] {
   const entries: BrowserEntry[] = []
-
   const defaultPath = defaultBrowserWindows()
   if (defaultPath) {
     entries.push({ path: defaultPath, kind: 'other' })
   }
-
   const localAppData = (process.env['LOCALAPPDATA'] ?? `${homedir()}/AppData/Local`).replace(/\\/g, '/')
   const programFiles = (process.env['PROGRAMFILES'] ?? 'C:/Program Files').replace(/\\/g, '/')
   const programFilesX86 = (process.env['PROGRAMFILES(X86)'] ?? 'C:/Program Files (x86)').replace(/\\/g, '/')
@@ -173,63 +170,83 @@ function resolveGeometry(config: Config): string | undefined {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Desktop shortcut & favicon                                         */
+/*  Frontend patch: inject pagehide → sendBeacon on tab close          */
 /* ------------------------------------------------------------------ */
 
-/** Search common locations for the DSH favicon SVG. */
+const QUIT_SCRIPT_ID = '__dsh_db_quitscript__'
+const QUIT_ROUTE_PATH = '/api/desktop-browser/quit'
+
+/**
+ * Inject a <script> that fires sendBeacon when the Web UI tab/page closes.
+ * Applied via tapIndex so it's non-destructive and survives DSH updates.
+ */
+function patchFrontend(webserver: { tapIndex: (t: (html: string) => string) => () => void }): () => void {
+  return webserver.tapIndex((html: string) => {
+    if (html.includes(QUIT_SCRIPT_ID)) return html
+    const script = `<script id="${QUIT_SCRIPT_ID}">document.addEventListener("pagehide",()=>{navigator.sendBeacon("${QUIT_ROUTE_PATH}")})</script>`
+    return html.replace('</body>', `${script}</body>`)
+  })
+}
+
+/* ------------------------------------------------------------------ */
+/*  Desktop shortcut                                                   */
+/* ------------------------------------------------------------------ */
+
 function findFaviconPath(): string | undefined {
   const candidates = [
     join(homedir(), '.dsh/profiles/web/node_modules/@deepseek-ai/dsh-web-frontend/dist/favicon.svg'),
   ]
-  for (const p of candidates) {
-    if (existsSync(p)) return p
-  }
+  for (const p of candidates) if (existsSync(p)) return p
   return undefined
 }
 
-/**
- * Create a desktop shortcut for launching `dsh web`.
- * On first run only — never overwrites an existing shortcut.
- */
+function createWindowsShortcut(
+  shortcutPath: string,
+  targetPath: string,
+  workingDir: string,
+  iconPath: string,
+): void {
+  const dir = join(...targetPath.split('/').slice(0, -1))
+  const ps1Path = join(dir, 'create-shortcut.ps1')
+  const ps1Content = [
+    `$sh = New-Object -ComObject WScript.Shell`,
+    `$lnk = $sh.CreateShortcut("${shortcutPath}")`,
+    `$lnk.TargetPath = "${targetPath}"`,
+    `$lnk.WorkingDirectory = "${workingDir}"`,
+    iconPath ? `$lnk.IconLocation = "${iconPath}"` : '',
+    `$lnk.Save()`,
+  ].filter(Boolean).join('\n')
+  try {
+    writeFileSync(ps1Path, ps1Content)
+    execSync(`powershell -ExecutionPolicy Bypass -File "${ps1Path}"`, { stdio: 'ignore' })
+  } catch {
+    /* non-fatal */
+  }
+}
+
 function createDesktopShortcut(config: ResolvedConfig): void {
   if (!config.desktopShortcut) return
-
   const os = platform()
   const desktopDir = join(homedir(), 'Desktop')
   const dshHome = join(homedir(), '.dsh')
   const shortcutName = config.shortcutName ?? 'DeepSeek Harness'
   const launcherPath = join(dshHome, 'launch-dsh.cmd')
 
-  // Write launcher script (only if it doesn't already exist)
   if (!existsSync(launcherPath)) {
-    try {
-      writeFileSync(launcherPath, '@echo off\r\nnpx @deepseek-ai/dsh web\r\n')
-    } catch {
-      return
-    }
+    try { writeFileSync(launcherPath, '@echo off\r\nnpx @deepseek-ai/dsh web\r\n') } catch { return }
   }
 
-  // Copy favicon for icon use
   const iconSrc = findFaviconPath()
   let iconPath = ''
   if (iconSrc) {
     iconPath = join(dshHome, 'dsh-icon.svg')
-    try {
-      if (!existsSync(iconPath)) {
-        copyFileSync(iconSrc, iconPath)
-      }
-    } catch {
-      // non-fatal — shortcut still works without icon
-      iconPath = ''
-    }
+    try { if (!existsSync(iconPath)) copyFileSync(iconSrc, iconPath) } catch { iconPath = '' }
   }
 
   try {
     if (os === 'win32') {
       const shortcutPath = join(desktopDir, `${shortcutName}.lnk`)
-      if (!existsSync(shortcutPath)) {
-        createWindowsShortcut(shortcutPath, launcherPath, dshHome, iconPath)
-      }
+      if (!existsSync(shortcutPath)) createWindowsShortcut(shortcutPath, launcherPath, dshHome, iconPath)
     } else if (os === 'darwin') {
       const cmdPath = join(desktopDir, `${shortcutName}.command`)
       if (!existsSync(cmdPath)) {
@@ -247,32 +264,7 @@ function createDesktopShortcut(config: ResolvedConfig): void {
       }
     }
   } catch {
-    // non-fatal — shortcut creation failure shouldn't break the plugin
-  }
-}
-
-/** Create a Windows .lnk shortcut via WScript.Shell COM. */
-function createWindowsShortcut(
-  shortcutPath: string,
-  targetPath: string,
-  workingDir: string,
-  iconPath: string,
-): void {
-  const ps1Path = join(targetPath.split('/').slice(0, -1).join('/'), 'create-shortcut.ps1')
-  const ps1Content = [
-    `$sh = New-Object -ComObject WScript.Shell`,
-    `$lnk = $sh.CreateShortcut("${shortcutPath}")`,
-    `$lnk.TargetPath = "${targetPath}"`,
-    `$lnk.WorkingDirectory = "${workingDir}"`,
-    iconPath ? `$lnk.IconLocation = "${iconPath}"` : '',
-    `$lnk.Save()`,
-  ].filter(Boolean).join('\n')
-
-  try {
-    writeFileSync(ps1Path, ps1Content)
-    execSync(`powershell -ExecutionPolicy Bypass -File "${ps1Path}"`, { stdio: 'ignore' })
-  } catch {
-    // non-fatal
+    /* non-fatal */
   }
 }
 
@@ -287,7 +279,6 @@ export class DesktopBrowser extends Service {
   private readonly config: ResolvedConfig
   private browserProcess: ReturnType<typeof spawn> | null = null
   private openTimer: ReturnType<typeof setTimeout> | null = null
-  private closeTimer: ReturnType<typeof setTimeout> | null = null
   private resolvedUrl: string | undefined
 
   constructor(ctx: Context, config: Config) {
@@ -314,18 +305,14 @@ export class DesktopBrowser extends Service {
     const chromiumPath = this.findChromiumBrowser()
     if (chromiumPath) {
       this.ctx.logger.info(`desktopBrowser: launching ${chromiumPath} with URL ${url}`)
-      this.browserProcess = spawn(chromiumPath, args, {
-        stdio: 'ignore',
-      })
+      this.browserProcess = spawn(chromiumPath, args, { stdio: 'ignore' })
     } else {
       const opener = platform() === 'win32' ? 'cmd' : platform() === 'darwin' ? 'open' : 'xdg-open'
       const openerArgs = platform() === 'win32' ? ['/c', 'start', '', url] : [url]
       this.ctx.logger.warn(
         `desktopBrowser: no Chromium browser found, opening ${url} with default browser (will retain address bar)`,
       )
-      this.browserProcess = spawn(opener, openerArgs, {
-        stdio: 'ignore',
-      })
+      this.browserProcess = spawn(opener, openerArgs, { stdio: 'ignore' })
     }
 
     this.browserProcess.on('error', (err: Error) => {
@@ -335,25 +322,10 @@ export class DesktopBrowser extends Service {
     this.browserProcess.on('exit', (code: number | null) => {
       this.ctx.logger.info(`desktopBrowser: browser exited (code=${code})`)
       this.browserProcess = null
-      if (this.config.closeOnBrowserExit) {
-        const delay = this.config.closeDelayMs
-        this.ctx.logger.info(
-          `desktopBrowser: browser closed — scheduling shutdown in ${delay}ms`,
-        )
-        this.closeTimer = setTimeout(() => {
-          if (!this.browserProcess) {
-            this.ctx.logger.info('desktopBrowser: shutting down dsh process')
-            process.exit(0)
-          } else {
-            this.ctx.logger.info('desktopBrowser: browser reopened, skipping shutdown')
-          }
-        }, delay)
-      }
     })
     this.browserProcess.unref()
   }
 
-  /** Find a Chromium-based browser installed on the system, or undefined. */
   private findChromiumBrowser(): string | undefined {
     if (this.config.browser && existsSync(this.config.browser)) {
       return this.config.browser.replace(/\\/g, '/')
@@ -376,10 +348,6 @@ export class DesktopBrowser extends Service {
       clearTimeout(this.openTimer)
       this.openTimer = null
     }
-    if (this.closeTimer) {
-      clearTimeout(this.closeTimer)
-      this.closeTimer = null
-    }
     if (this.browserProcess) {
       this.ctx.logger.info('desktopBrowser: closing browser')
       this.browserProcess.kill('SIGTERM')
@@ -390,21 +358,43 @@ export class DesktopBrowser extends Service {
   }
 
   async [Service.init](): Promise<void> {
-    const webserver = this.ctx.webServer as { host?: string; port?: number } | undefined
-    const host = webserver?.host ?? this.config.url?.match(/^http:\/\/([^\/:]+)/)?.[1] ?? '127.0.0.1'
-    const port = webserver?.port ?? Number(this.config.url?.match(/:(\d+)/)?.[1] ?? '3080')
+    const host = this.ctx.webServer?.host ?? this.config.url?.match(/^http:\/\/([^\/:]+)/)?.[1] ?? '127.0.0.1'
+    const port = this.ctx.webServer?.port ?? Number(this.config.url?.match(/:(\d+)/)?.[1] ?? '3080')
     this.resolvedUrl = `http://${host}:${port}`
     this.ctx.logger.info(`desktopBrowser: ready — will open ${this.resolvedUrl}`)
 
-    this.openTimer = setTimeout(() => {
-      this.open()
-    }, this.config.openDelayMs)
+    this.openTimer = setTimeout(() => { this.open() }, this.config.openDelayMs)
 
     createDesktopShortcut(this.config)
 
-    this.ctx.effect(() => () => {
-      this.close()
-    }, 'desktopBrowser.open')
+    // Feature 1: close dsh when Web UI tab closes
+    if (this.config.closeOnBrowserExit && this.ctx.webServer) {
+      const delay = this.config.closeDelayMs
+      try {
+        // Patch frontend: inject pagehide → sendBeacon script
+        patchFrontend(this.ctx.webServer)
+        this.ctx.logger.info('desktopBrowser: frontend patched — pagehide will trigger quit')
+
+        // Register backend quit route
+        this.ctx.webServer.register({
+          kind: 'exact',
+          path: QUIT_ROUTE_PATH,
+          handler: (_req, res) => {
+            res.writeHead(204)
+            res.end()
+            setTimeout(() => {
+              this.ctx.logger.info('desktopBrowser: quit requested, shutting down dsh')
+              process.exit(0)
+            }, delay)
+          },
+        })
+        this.ctx.logger.info(`desktopBrowser: quit route registered at ${QUIT_ROUTE_PATH} (delay=${delay}ms)`)
+      } catch (err) {
+        this.ctx.logger.warn(`desktopBrowser: failed to set up close-on-browser-exit: ${err}`)
+      }
+    }
+
+    this.ctx.effect(() => () => { this.close() }, 'desktopBrowser.open')
   }
 
   private detectBrowsers(): BrowserEntry[] {
@@ -417,12 +407,10 @@ export class DesktopBrowser extends Service {
   private buildArgs(url: string): string[] {
     const args: string[] = []
     const geometry = resolveGeometry(this.config)
-
     args.push('--app=' + url)
     if (geometry) args.push('--window-size=' + geometry)
     if (this.config.disableExtensions) args.push('--disable-extensions')
     if (this.config.minimize) args.push('--start-minimized')
-
     return args
   }
 }
