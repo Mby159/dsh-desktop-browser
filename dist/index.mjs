@@ -7,6 +7,9 @@ import z from "@deepseek-ai/schemastery";
 //#region src/index.ts
 const QUIT_SCRIPT_ID = "__dsh_db_quitscript__";
 const QUIT_ROUTE_PATH = "/api/desktop-browser/quit";
+const ALIVE_ROUTE_PATH = "/api/desktop-browser/alive";
+const HEARTBEAT_INTERVAL_MS = 3000;
+const HEARTBEAT_TIMEOUT_MS = 10000;
 
 const Config = z.object({
 	url: z.string(),
@@ -78,8 +81,9 @@ function patchFrontend(webserver) {
 	return webserver.tapIndex((html) => {
 		if (html.includes(QUIT_SCRIPT_ID)) return html;
 		const script = `<script id="${QUIT_SCRIPT_ID}">
+setInterval(function(){navigator.sendBeacon("${ALIVE_ROUTE_PATH}")},${HEARTBEAT_INTERVAL_MS})
 document.addEventListener("pagehide",function(){navigator.sendBeacon("${QUIT_ROUTE_PATH}")})
-document.addEventListener("beforeunload",function(){navigator.sendBeacon("${QUIT_ROUTE_PATH}")})
+document.addEventListener("visibilitychange",function(){if(document.visibilityState==="hidden"){navigator.sendBeacon("${QUIT_ROUTE_PATH}")}})
 </script>`;
 		return html.replace("</body>", `${script}</body>`);
 	});
@@ -132,6 +136,8 @@ var DesktopBrowser = class extends Service {
 	config;
 	browserProcess = null;
 	openTimer = null;
+	heartbeatTimer = null;
+	lastAliveAt = Date.now();
 	resolvedUrl;
 	constructor(ctx, config) { super(ctx, "desktopBrowser"); this.config = config; }
 	get url() { return this.resolvedUrl; }
@@ -165,6 +171,7 @@ var DesktopBrowser = class extends Service {
 	}
 	close() {
 		if (this.openTimer) { clearTimeout(this.openTimer); this.openTimer = null; }
+		if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; }
 		if (this.browserProcess) { this.ctx.logger.info("desktopBrowser: closing browser"); this.browserProcess.kill("SIGTERM"); this.browserProcess = null; }
 		else { this.ctx.logger.info("desktopBrowser: not running"); }
 	}
@@ -179,9 +186,19 @@ var DesktopBrowser = class extends Service {
 			const delay = this.config.closeDelayMs;
 			try {
 				patchFrontend(this.ctx.webServer);
-				this.ctx.logger.info("desktopBrowser: frontend patched — pagehide will trigger quit");
+				this.ctx.logger.info("desktopBrowser: frontend patched — heartbeat + pagehide + visibilitychange");
+				this.ctx.webServer.register({ kind: "exact", path: ALIVE_ROUTE_PATH, handler: (_req, res) => { this.lastAliveAt = Date.now(); res.writeHead(204); res.end(); } });
 				this.ctx.webServer.register({ kind: "exact", path: QUIT_ROUTE_PATH, handler: (_req, res) => { res.writeHead(204); res.end(); setTimeout(() => { this.ctx.logger.info("desktopBrowser: quit requested, shutting down dsh"); process.exit(0); }, delay); } });
-				this.ctx.logger.info(`desktopBrowser: quit route registered at ${QUIT_ROUTE_PATH} (delay=${delay}ms)`);
+				this.ctx.logger.info("desktopBrowser: alive+quit routes registered");
+				this.heartbeatTimer = setInterval(() => {
+					const idle = Date.now() - this.lastAliveAt;
+					if (idle > HEARTBEAT_TIMEOUT_MS) {
+						this.ctx.logger.info(`desktopBrowser: no heartbeat for ${Math.round(idle/1000)}s — shutting down dsh`);
+						if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+						this.heartbeatTimer = null;
+						process.exit(0);
+					}
+				}, 1000);
 			} catch (err) { this.ctx.logger.warn(`desktopBrowser: failed to set up close-on-browser-exit: ${err}`); }
 		}
 		this.ctx.effect(() => () => { this.close(); }, "desktopBrowser.open");
