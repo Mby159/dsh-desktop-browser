@@ -6,7 +6,7 @@
  */
 
 import { execSync, spawn } from 'node:child_process'
-import { copyFileSync, existsSync, writeFileSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { homedir, platform } from 'node:os'
 import { join } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
@@ -202,19 +202,10 @@ function patchFrontend(webserver: { tapIndex: (t: (html: string) => string) => (
 /*  Desktop shortcut                                                   */
 /* ------------------------------------------------------------------ */
 
-function findFaviconPath(): string | undefined {
-  const candidates = [
-    join(homedir(), '.dsh/profiles/web/node_modules/@deepseek-ai/dsh-web-frontend/dist/favicon.svg'),
-  ]
-  for (const p of candidates) if (existsSync(p)) return p
-  return undefined
-}
-
 function createWindowsShortcut(
   shortcutPath: string,
   targetPath: string,
   workingDir: string,
-  iconPath: string,
 ): void {
   const dir = join(...targetPath.split('/').slice(0, -1))
   const ps1Path = join(dir, 'create-shortcut.ps1')
@@ -223,9 +214,8 @@ function createWindowsShortcut(
     `$lnk = $sh.CreateShortcut("${shortcutPath}")`,
     `$lnk.TargetPath = "${targetPath}"`,
     `$lnk.WorkingDirectory = "${workingDir}"`,
-    iconPath ? `$lnk.IconLocation = "${iconPath}"` : '',
     `$lnk.Save()`,
-  ].filter(Boolean).join('\n')
+  ].join('\n')
   try {
     writeFileSync(ps1Path, ps1Content)
     execSync(`powershell -ExecutionPolicy Bypass -File "${ps1Path}"`, { stdio: 'ignore' })
@@ -246,17 +236,10 @@ function createDesktopShortcut(config: ResolvedConfig): void {
     try { writeFileSync(launcherPath, '@echo off\r\nnpx @deepseek-ai/dsh web\r\n') } catch { return }
   }
 
-  const iconSrc = findFaviconPath()
-  let iconPath = ''
-  if (iconSrc) {
-    iconPath = join(dshHome, 'dsh-icon.svg')
-    try { if (!existsSync(iconPath)) copyFileSync(iconSrc, iconPath) } catch { iconPath = '' }
-  }
-
   try {
     if (os === 'win32') {
       const shortcutPath = join(desktopDir, `${shortcutName}.lnk`)
-      if (!existsSync(shortcutPath)) createWindowsShortcut(shortcutPath, launcherPath, dshHome, iconPath)
+      if (!existsSync(shortcutPath)) createWindowsShortcut(shortcutPath, launcherPath, dshHome)
     } else if (os === 'darwin') {
       const cmdPath = join(desktopDir, `${shortcutName}.command`)
       if (!existsSync(cmdPath)) {
@@ -267,7 +250,7 @@ function createDesktopShortcut(config: ResolvedConfig): void {
       const appsDir = join(homedir(), '.local/share/applications')
       const desktopPath = join(desktopDir, `${shortcutName}.desktop`)
       if (!existsSync(desktopPath)) {
-        const content = `[Desktop Entry]\nType=Application\nName=${shortcutName}\nExec=npx @deepseek-ai/dsh web\nIcon=${iconPath}\nTerminal=false\n`
+        const content = `[Desktop Entry]\nType=Application\nName=${shortcutName}\nExec=npx @deepseek-ai/dsh web\nTerminal=false\n`
         writeFileSync(desktopPath, content)
         try { execSync(`chmod +x "${desktopPath}"`, { stdio: 'ignore' }) } catch {}
         writeFileSync(join(appsDir, 'deepseek-harness.desktop'), content)

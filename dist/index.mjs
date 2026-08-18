@@ -1,5 +1,5 @@
 import { execSync, spawn } from "node:child_process";
-import { copyFileSync, existsSync, writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import { Service } from "@deepseek-ai/cordis";
@@ -87,16 +87,11 @@ document.addEventListener("pagehide",function(){navigator.sendBeacon("${QUIT_ROU
 		return html.replace("</body>", `${script}</body>`);
 	});
 }
-function createWindowsShortcut(shortcutPath, targetPath, workingDir, iconPath) {
+function createWindowsShortcut(shortcutPath, targetPath, workingDir) {
 	const dir = join(...targetPath.split("/").slice(0, -1));
 	const ps1Path = join(dir, "create-shortcut.ps1");
-	const ps1Content = [`$sh = New-Object -ComObject WScript.Shell`, `$lnk = $sh.CreateShortcut("${shortcutPath}")`, `$lnk.TargetPath = "${targetPath}"`, `$lnk.WorkingDirectory = "${workingDir}"`, iconPath ? `$lnk.IconLocation = "${iconPath}"` : "", `$lnk.Save()`].filter(Boolean).join("\n");
+	const ps1Content = [`$sh = New-Object -ComObject WScript.Shell`, `$lnk = $sh.CreateShortcut("${shortcutPath}")`, `$lnk.TargetPath = "${targetPath}"`, `$lnk.WorkingDirectory = "${workingDir}"`, `$lnk.Save()`].join("\n");
 	try { writeFileSync(ps1Path, ps1Content); execSync(`powershell -ExecutionPolicy Bypass -File "${ps1Path}"`, { stdio: "ignore" }); } catch {}
-}
-function findFaviconPath() {
-	const candidates = [join(homedir(), ".dsh/profiles/web/node_modules/@deepseek-ai/dsh-web-frontend/dist/favicon.svg")];
-	for (const p of candidates) if (existsSync(p)) return p;
-	return void 0;
 }
 function createDesktopShortcut(config) {
 	if (!config.desktopShortcut) return;
@@ -106,13 +101,10 @@ function createDesktopShortcut(config) {
 	const shortcutName = config.shortcutName ?? "DeepSeek Harness";
 	const launcherPath = join(dshHome, "launch-dsh.cmd");
 	if (!existsSync(launcherPath)) { try { writeFileSync(launcherPath, "@echo off\r\nnpx @deepseek-ai/dsh web\r\n"); } catch { return; } }
-	const iconSrc = findFaviconPath();
-	let iconPath = "";
-	if (iconSrc) { iconPath = join(dshHome, "dsh-icon.svg"); try { if (!existsSync(iconPath)) copyFileSync(iconSrc, iconPath); } catch { iconPath = ""; } }
 	try {
 		if (os === "win32") {
 			const shortcutPath = join(desktopDir, `${shortcutName}.lnk`);
-			if (!existsSync(shortcutPath)) createWindowsShortcut(shortcutPath, launcherPath, dshHome, iconPath);
+			if (!existsSync(shortcutPath)) createWindowsShortcut(shortcutPath, launcherPath, dshHome);
 		} else if (os === "darwin") {
 			const cmdPath = join(desktopDir, `${shortcutName}.command`);
 			if (!existsSync(cmdPath)) { writeFileSync(cmdPath, "#!/bin/bash\nnpx @deepseek-ai/dsh web\n"); execSync(`chmod +x "${cmdPath}"`, { stdio: "ignore" }); }
@@ -120,7 +112,7 @@ function createDesktopShortcut(config) {
 			const appsDir = join(homedir(), ".local/share/applications");
 			const desktopPath = join(desktopDir, `${shortcutName}.desktop`);
 			if (!existsSync(desktopPath)) {
-				const content = `[Desktop Entry]\nType=Application\nName=${shortcutName}\nExec=npx @deepseek-ai/dsh web\nIcon=${iconPath}\nTerminal=false\n`;
+				const content = `[Desktop Entry]\nType=Application\nName=${shortcutName}\nExec=npx @deepseek-ai/dsh web\nTerminal=false\n`;
 				writeFileSync(desktopPath, content);
 				try { execSync(`chmod +x "${desktopPath}"`, { stdio: "ignore" }) } catch {}
 				writeFileSync(join(appsDir, "deepseek-harness.desktop"), content);
