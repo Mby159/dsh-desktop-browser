@@ -5,9 +5,10 @@
  * @module @deepseek-ai/dsh-desktop-browser
  */
 
-import { spawn, execSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import { platform, homedir } from 'node:os'
+import { execSync, spawn } from 'node:child_process'
+import { copyFileSync, existsSync, writeFileSync } from 'node:fs'
+import { homedir, platform } from 'node:os'
+import { join } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 
@@ -32,6 +33,10 @@ export interface Config {
   disableExtensions?: boolean
   openDelayMs?: number
   minimize?: boolean
+  closeOnBrowserExit?: boolean
+  closeDelayMs?: number
+  desktopShortcut?: boolean
+  shortcutName?: string
 }
 
 export const Config: z<Config> = z.object({
@@ -44,6 +49,10 @@ export const Config: z<Config> = z.object({
   disableExtensions: z.boolean().default(true),
   openDelayMs: z.natural().default(500),
   minimize: z.boolean().default(false),
+  closeOnBrowserExit: z.boolean().default(true),
+  closeDelayMs: z.natural().default(2000),
+  desktopShortcut: z.boolean().default(true),
+  shortcutName: z.string().default('DeepSeek Harness'),
 })
 
 type ResolvedConfig = Required<
@@ -69,22 +78,18 @@ function findFirst(candidates: string[]): string | undefined {
 /** Query Windows registry for the user's default HTTP handler. */
 function defaultBrowserWindows(): string | undefined {
   try {
-    // HKCU\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice\ProgId
-    const progId = execSync(
+    const match = execSync(
       'reg query "HKCU\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\http\\UserChoice" /v ProgId 2>&1',
       { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] },
-    )
-    const match = progId.match(/ProgId\s+REG_SZ\s+(.+)/i)
+    ).match(/ProgId\s+REG_SZ\s+(.+)/i)
     if (!match || !match[1]) return undefined
 
     const id = match[1].trim().replace(/^"|"$/g, '')
 
-    // HKLM\SOFTWARE\Classes\<ProgId>\shell\open\command — grab the first quoted exe
     const cmd = execSync(
       `reg query "HKLM\\SOFTWARE\\Classes\\${id}\\shell\\open\\command" /ve 2>&1`,
       { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] },
     )
-    // Match first quoted path only (non-greedy) — avoids swallowing trailing flags
     const cmdMatch = cmd.match(/"([^"]*\.exe)"/i)
     if (cmdMatch && cmdMatch[1]) return cmdMatch[1].trim()
     return undefined
@@ -96,13 +101,11 @@ function defaultBrowserWindows(): string | undefined {
 function detectWindowsBrowsers(): BrowserEntry[] {
   const entries: BrowserEntry[] = []
 
-  // 1. Default browser from registry (respects user choice)
   const defaultPath = defaultBrowserWindows()
   if (defaultPath) {
     entries.push({ path: defaultPath, kind: 'other' })
   }
 
-  // 2. Common Chromium-based browsers (for --app mode support)
   const localAppData = (process.env['LOCALAPPDATA'] ?? `${homedir()}/AppData/Local`).replace(/\\/g, '/')
   const programFiles = (process.env['PROGRAMFILES'] ?? 'C:/Program Files').replace(/\\/g, '/')
   const programFilesX86 = (process.env['PROGRAMFILES(X86)'] ?? 'C:/Program Files (x86)').replace(/\\/g, '/')
@@ -170,6 +173,110 @@ function resolveGeometry(config: Config): string | undefined {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Desktop shortcut & favicon                                         */
+/* ------------------------------------------------------------------ */
+
+/** Search common locations for the DSH favicon SVG. */
+function findFaviconPath(): string | undefined {
+  const candidates = [
+    join(homedir(), '.dsh/profiles/web/node_modules/@deepseek-ai/dsh-web-frontend/dist/favicon.svg'),
+  ]
+  for (const p of candidates) {
+    if (existsSync(p)) return p
+  }
+  return undefined
+}
+
+/**
+ * Create a desktop shortcut for launching `dsh web`.
+ * On first run only — never overwrites an existing shortcut.
+ */
+function createDesktopShortcut(config: ResolvedConfig): void {
+  if (!config.desktopShortcut) return
+
+  const os = platform()
+  const desktopDir = join(homedir(), 'Desktop')
+  const dshHome = join(homedir(), '.dsh')
+  const shortcutName = config.shortcutName ?? 'DeepSeek Harness'
+  const launcherPath = join(dshHome, 'launch-dsh.cmd')
+
+  // Write launcher script (only if it doesn't already exist)
+  if (!existsSync(launcherPath)) {
+    try {
+      writeFileSync(launcherPath, '@echo off\r\nnpx @deepseek-ai/dsh web\r\n')
+    } catch {
+      return
+    }
+  }
+
+  // Copy favicon for icon use
+  const iconSrc = findFaviconPath()
+  let iconPath = ''
+  if (iconSrc) {
+    iconPath = join(dshHome, 'dsh-icon.svg')
+    try {
+      if (!existsSync(iconPath)) {
+        copyFileSync(iconSrc, iconPath)
+      }
+    } catch {
+      // non-fatal — shortcut still works without icon
+      iconPath = ''
+    }
+  }
+
+  try {
+    if (os === 'win32') {
+      const shortcutPath = join(desktopDir, `${shortcutName}.lnk`)
+      if (!existsSync(shortcutPath)) {
+        createWindowsShortcut(shortcutPath, launcherPath, dshHome, iconPath)
+      }
+    } else if (os === 'darwin') {
+      const cmdPath = join(desktopDir, `${shortcutName}.command`)
+      if (!existsSync(cmdPath)) {
+        writeFileSync(cmdPath, '#!/bin/bash\nnpx @deepseek-ai/dsh web\n')
+        execSync(`chmod +x "${cmdPath}"`, { stdio: 'ignore' })
+      }
+    } else {
+      const appsDir = join(homedir(), '.local/share/applications')
+      const desktopPath = join(desktopDir, `${shortcutName}.desktop`)
+      if (!existsSync(desktopPath)) {
+        const content = `[Desktop Entry]\nType=Application\nName=${shortcutName}\nExec=npx @deepseek-ai/dsh web\nIcon=${iconPath}\nTerminal=false\n`
+        writeFileSync(desktopPath, content)
+        try { execSync(`chmod +x "${desktopPath}"`, { stdio: 'ignore' }) } catch {}
+        writeFileSync(join(appsDir, 'deepseek-harness.desktop'), content)
+      }
+    }
+  } catch {
+    // non-fatal — shortcut creation failure shouldn't break the plugin
+  }
+}
+
+/** Create a Windows .lnk shortcut via WScript.Shell COM. */
+function createWindowsShortcut(
+  shortcutPath: string,
+  targetPath: string,
+  workingDir: string,
+  iconPath: string,
+): void {
+  const ps1Path = join(targetPath.split('/').slice(0, -1).join('/'), 'create-shortcut.ps1')
+  const ps1Content = [
+    `$sh = New-Object -ComObject WScript.Shell`,
+    `$lnk = $sh.CreateShortcut("${shortcutPath}")`,
+    `$lnk.TargetPath = "${targetPath}"`,
+    `$lnk.WorkingDirectory = "${workingDir}"`,
+    iconPath ? `$lnk.IconLocation = "${iconPath}"` : '',
+    `$lnk.Save()`,
+  ].filter(Boolean).join('\n')
+
+  try {
+    writeFileSync(ps1Path, ps1Content)
+    execSync(`powershell -ExecutionPolicy Bypass -File "${ps1Path}"`, { stdio: 'ignore' })
+  } catch {
+    // non-fatal
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Service                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -180,6 +287,7 @@ export class DesktopBrowser extends Service {
   private readonly config: ResolvedConfig
   private browserProcess: ReturnType<typeof spawn> | null = null
   private openTimer: ReturnType<typeof setTimeout> | null = null
+  private closeTimer: ReturnType<typeof setTimeout> | null = null
   private resolvedUrl: string | undefined
 
   constructor(ctx: Context, config: Config) {
@@ -229,6 +337,20 @@ export class DesktopBrowser extends Service {
     this.browserProcess.on('exit', (code: number | null) => {
       this.ctx.logger.info(`desktopBrowser: browser exited (code=${code})`)
       this.browserProcess = null
+      if (this.config.closeOnBrowserExit) {
+        const delay = this.config.closeDelayMs
+        this.ctx.logger.info(
+          `desktopBrowser: browser closed — scheduling shutdown in ${delay}ms`,
+        )
+        this.closeTimer = setTimeout(() => {
+          if (!this.browserProcess) {
+            this.ctx.logger.info('desktopBrowser: shutting down dsh process')
+            process.exit(0)
+          } else {
+            this.ctx.logger.info('desktopBrowser: browser reopened, skipping shutdown')
+          }
+        }, delay)
+      }
     })
     this.browserProcess.unref()
   }
@@ -256,6 +378,10 @@ export class DesktopBrowser extends Service {
       clearTimeout(this.openTimer)
       this.openTimer = null
     }
+    if (this.closeTimer) {
+      clearTimeout(this.closeTimer)
+      this.closeTimer = null
+    }
     if (this.browserProcess) {
       this.ctx.logger.info('desktopBrowser: closing browser')
       this.browserProcess.kill('SIGTERM')
@@ -275,6 +401,8 @@ export class DesktopBrowser extends Service {
     this.openTimer = setTimeout(() => {
       this.open()
     }, this.config.openDelayMs)
+
+    createDesktopShortcut(this.config)
 
     this.ctx.effect(() => () => {
       this.close()
