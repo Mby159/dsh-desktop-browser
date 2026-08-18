@@ -7,8 +7,8 @@ import z from "@deepseek-ai/schemastery";
 //#region src/index.ts
 const QUIT_SCRIPT_ID = "__dsh_db_quitscript__";
 const ALIVE_ROUTE_PATH = "/api/desktop-browser/alive";
-const HEARTBEAT_INTERVAL_MS = 5000;
-const HEARTBEAT_TIMEOUT_MS = 15000;
+const HEARTBEAT_INTERVAL_MS = 3000;
+const HEARTBEAT_TIMEOUT_MS = 60000;
 
 const Config = z.object({
 	url: z.string(),
@@ -80,7 +80,10 @@ function patchFrontend(webserver) {
 	return webserver.tapIndex((html) => {
 		if (html.includes(QUIT_SCRIPT_ID)) return html;
 		const script = `<script id="${QUIT_SCRIPT_ID}">
-setInterval(function(){fetch("${ALIVE_ROUTE_PATH}",{method:"POST",keepalive:true})},${HEARTBEAT_INTERVAL_MS})
+var _hb=function(){fetch("${ALIVE_ROUTE_PATH}",{method:"POST",keepalive:true})}
+_hb()
+setInterval(_hb,${HEARTBEAT_INTERVAL_MS})
+document.addEventListener("visibilitychange",function(){if(document.visibilityState==="visible")_hb()})
 </script>`;
 		return html.replace("</body>", `${script}</body>`);
 	});

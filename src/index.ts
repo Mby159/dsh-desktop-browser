@@ -175,8 +175,8 @@ function resolveGeometry(config: Config): string | undefined {
 
 const QUIT_SCRIPT_ID = '__dsh_db_quitscript__'
 const ALIVE_ROUTE_PATH = '/api/desktop-browser/alive'
-const HEARTBEAT_INTERVAL_MS = 5000
-const HEARTBEAT_TIMEOUT_MS = 15000
+const HEARTBEAT_INTERVAL_MS = 3000
+const HEARTBEAT_TIMEOUT_MS = 60000
 
 /**
  * Inject a <script> that fires sendBeacon when the Web UI tab/page closes.
@@ -186,9 +186,14 @@ function patchFrontend(webserver: { tapIndex: (t: (html: string) => string) => (
   return webserver.tapIndex((html: string) => {
     if (html.includes(QUIT_SCRIPT_ID)) return html
     const script = `<script id="${QUIT_SCRIPT_ID}">
-      setInterval(function(){
+      var _hb = function(){
         fetch("${ALIVE_ROUTE_PATH}", { method: "POST", keepalive: true })
-      }, ${HEARTBEAT_INTERVAL_MS})
+      }
+      _hb()
+      setInterval(_hb, ${HEARTBEAT_INTERVAL_MS})
+      document.addEventListener("visibilitychange", function(){
+        if (document.visibilityState === "visible") _hb()
+      })
     </script>`
     return html.replace('</body>', `${script}</body>`)
   })
