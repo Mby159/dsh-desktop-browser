@@ -6,7 +6,7 @@
  */
 
 import { execSync, spawn } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { homedir, platform } from 'node:os'
 import { dirname, join } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
@@ -202,14 +202,12 @@ function patchFrontend(webserver: { tapIndex: (t: (html: string) => string) => (
 /*  Desktop shortcut                                                   */
 /* ------------------------------------------------------------------ */
 
-function findIconPath(): { path: string; ext: string } | undefined {
+function findIconPath(): string | undefined {
   const candidates = [
-    join(homedir(), '.dsh/profiles/web/node_modules/@deepseek-ai/dsh-web-frontend/dist/favicon.ico'),
-    join(homedir(), '.dsh/profiles/web/node_modules/@deepseek-ai/dsh-web-frontend/dist/favicon.svg'),
-    join(homedir(), '.dsh/profiles/web/node_modules/@deepseek-ai/dsh-web-frontend/dist/favicon.png'),
     join(homedir(), '.dsh/dsh-icon.ico'),
+    join(homedir(), '.dsh/profiles/web/node_modules/@deepseek-ai/dsh-web-frontend/dist/favicon.ico'),
   ]
-  for (const p of candidates) if (existsSync(p)) return { path: p, ext: p.split('.').pop() ?? '' }
+  for (const p of candidates) if (existsSync(p)) return p
   return undefined
 }
 
@@ -249,16 +247,7 @@ function createDesktopShortcut(config: ResolvedConfig): void {
     try { writeFileSync(launcherPath, '@echo off\r\nnpx @deepseek-ai/dsh web\r\n') } catch { return }
   }
 
-  const icon = findIconPath()
-  let iconPath = ''
-  if (icon && icon.ext === 'svg') {
-    // Copy SVG to .dsh for reference; ICO conversion happens at install time
-    iconPath = join(dshHome, 'dsh-icon.svg')
-    try { if (!existsSync(iconPath)) copyFileSync(icon.path, iconPath) } catch { iconPath = '' }
-  } else if (icon && icon.ext === 'ico') {
-    iconPath = join(dshHome, 'dsh-icon.ico')
-    try { if (!existsSync(iconPath)) copyFileSync(icon.path, iconPath) } catch { iconPath = '' }
-  }
+  const iconPath = findIconPath()
 
   try {
     if (os === 'win32') {
