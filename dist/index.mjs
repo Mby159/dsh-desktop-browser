@@ -6,10 +6,11 @@ import { Service } from "@deepseek-ai/cordis";
 import z from "@deepseek-ai/schemastery";
 //#region src/index.ts
 const QUIT_SCRIPT_ID = "__dsh_db_quitscript__";
-const QUIT_ROUTE_PATH = "/api/desktop-browser/quit";
 const ALIVE_ROUTE_PATH = "/api/desktop-browser/alive";
 const HEARTBEAT_INTERVAL_MS = 5000;
 const HEARTBEAT_TIMEOUT_MS = 15000;
+const WINDOW_POLL_INTERVAL_MS = 1500;
+const WINDOW_MISSING_THRESHOLD = 3;
 
 const Config = z.object({
 	url: z.string(),
@@ -136,7 +137,9 @@ var DesktopBrowser = class extends Service {
 	browserProcess = null;
 	openTimer = null;
 	heartbeatTimer = null;
+	windowPollTimer = null;
 	lastAliveAt = Date.now();
+	windowMissingCount = 0;
 	resolvedUrl;
 	constructor(ctx, config) { super(ctx, "desktopBrowser"); this.config = config; }
 	get url() { return this.resolvedUrl; }
@@ -171,8 +174,36 @@ var DesktopBrowser = class extends Service {
 	close() {
 		if (this.openTimer) { clearTimeout(this.openTimer); this.openTimer = null; }
 		if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; }
+		if (this.windowPollTimer) { clearInterval(this.windowPollTimer); this.windowPollTimer = null; }
 		if (this.browserProcess) { this.ctx.logger.info("desktopBrowser: closing browser"); this.browserProcess.kill("SIGTERM"); this.browserProcess = null; }
 		else { this.ctx.logger.info("desktopBrowser: not running"); }
+	}
+	checkWindowAlive() {
+		if (platform() !== "win32") return;
+		const dshHome = join(homedir(), ".dsh");
+		const ps1Path = join(dshHome, "check-window.ps1");
+		try {
+			if (!existsSync(ps1Path)) {
+				writeFileSync(ps1Path, [
+					"Get-Process chrome -ErrorAction SilentlyContinue |",
+					"  Where-Object { $_.MainWindowTitle -match \"DeepSeek|127\\.0\\.0\\.1\" } |",
+					"  Select-Object -First 1 -ExpandProperty Id"
+				].join("\r\n"));
+			}
+			const result = execSync(`powershell -ExecutionPolicy Bypass -NoProfile -File "${ps1Path}"`, { encoding: "utf8", timeout: 3000 }).trim();
+			if (result) { this.windowMissingCount = 0; }
+			else {
+				this.windowMissingCount++;
+				if (this.windowMissingCount >= WINDOW_MISSING_THRESHOLD) {
+					this.ctx.logger.info("desktopBrowser: browser window closed — shutting down dsh");
+					if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+					if (this.windowPollTimer) clearInterval(this.windowPollTimer);
+					this.heartbeatTimer = null;
+					this.windowPollTimer = null;
+					process.exit(0);
+				}
+			}
+		} catch {}
 	}
 	async [Service.init]() {
 		const host = this.ctx.webServer?.host ?? this.config.url?.match(/^http:\/\/([^\/:]+)/)?.[1] ?? "127.0.0.1";
@@ -182,22 +213,22 @@ var DesktopBrowser = class extends Service {
 		this.openTimer = setTimeout(() => { this.open(); }, this.config.openDelayMs);
 		createDesktopShortcut(this.config);
 		if (this.config.closeOnBrowserExit && this.ctx.webServer) {
-			const delay = this.config.closeDelayMs;
 			try {
 				patchFrontend(this.ctx.webServer);
-				this.ctx.logger.info("desktopBrowser: frontend patched — heartbeat + pagehide + visibilitychange");
-				this.ctx.webServer.register({ kind: "exact", path: ALIVE_ROUTE_PATH, handler: (_req, res) => { this.lastAliveAt = Date.now(); res.writeHead(204); res.end(); } });
-				this.ctx.webServer.register({ kind: "exact", path: QUIT_ROUTE_PATH, handler: (_req, res) => { res.writeHead(204); res.end(); setTimeout(() => { this.ctx.logger.info("desktopBrowser: quit requested, shutting down dsh"); process.exit(0); }, delay); } });
-				this.ctx.logger.info("desktopBrowser: alive+quit routes registered");
+				this.ctx.logger.info("desktopBrowser: frontend patched — heartbeat active");
+				this.ctx.webServer.register({ kind: "exact", path: ALIVE_ROUTE_PATH, handler: (_req, res) => { this.lastAliveAt = Date.now(); this.windowMissingCount = 0; res.writeHead(204); res.end(); } });
 				this.heartbeatTimer = setInterval(() => {
 					const idle = Date.now() - this.lastAliveAt;
 					if (idle > HEARTBEAT_TIMEOUT_MS) {
 						this.ctx.logger.info(`desktopBrowser: no heartbeat for ${Math.round(idle/1000)}s — shutting down dsh`);
 						if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+						if (this.windowPollTimer) clearInterval(this.windowPollTimer);
 						this.heartbeatTimer = null;
+						this.windowPollTimer = null;
 						process.exit(0);
 					}
 				}, 1000);
+				this.windowPollTimer = setInterval(() => { this.checkWindowAlive(); }, WINDOW_POLL_INTERVAL_MS);
 			} catch (err) { this.ctx.logger.warn(`desktopBrowser: failed to set up close-on-browser-exit: ${err}`); }
 		}
 		this.ctx.effect(() => () => { this.close(); }, "desktopBrowser.open");

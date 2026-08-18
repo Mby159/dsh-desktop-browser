@@ -174,10 +174,11 @@ function resolveGeometry(config: Config): string | undefined {
 /* ------------------------------------------------------------------ */
 
 const QUIT_SCRIPT_ID = '__dsh_db_quitscript__'
-const QUIT_ROUTE_PATH = '/api/desktop-browser/quit'
 const ALIVE_ROUTE_PATH = '/api/desktop-browser/alive'
 const HEARTBEAT_INTERVAL_MS = 5000
 const HEARTBEAT_TIMEOUT_MS = 15000
+const WINDOW_POLL_INTERVAL_MS = 1500
+const WINDOW_MISSING_THRESHOLD = 3
 
 /**
  * Inject a <script> that fires sendBeacon when the Web UI tab/page closes.
@@ -283,7 +284,9 @@ export class DesktopBrowser extends Service {
   private browserProcess: ReturnType<typeof spawn> | null = null
   private openTimer: ReturnType<typeof setTimeout> | null = null
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
+  private windowPollTimer: ReturnType<typeof setInterval> | null = null
   private lastAliveAt: number = Date.now()
+  private windowMissingCount: number = 0
   private resolvedUrl: string | undefined
 
   constructor(ctx: Context, config: Config) {
@@ -357,12 +360,50 @@ export class DesktopBrowser extends Service {
       clearInterval(this.heartbeatTimer)
       this.heartbeatTimer = null
     }
+    if (this.windowPollTimer) {
+      clearInterval(this.windowPollTimer)
+      this.windowPollTimer = null
+    }
     if (this.browserProcess) {
       this.ctx.logger.info('desktopBrowser: closing browser')
       this.browserProcess.kill('SIGTERM')
       this.browserProcess = null
     } else {
       this.ctx.logger.info('desktopBrowser: not running')
+    }
+  }
+
+  private checkWindowAlive(): void {
+    if (platform() !== 'win32') return
+    const dshHome = join(homedir(), '.dsh')
+    const ps1Path = join(dshHome, 'check-window.ps1')
+    try {
+      if (!existsSync(ps1Path)) {
+        writeFileSync(ps1Path, [
+          'Get-Process chrome -ErrorAction SilentlyContinue |',
+          '  Where-Object { $_.MainWindowTitle -match "DeepSeek|127\\.0\\.0\\.1" } |',
+          '  Select-Object -First 1 -ExpandProperty Id',
+        ].join('\r\n'))
+      }
+      const result = execSync(
+        `powershell -ExecutionPolicy Bypass -NoProfile -File "${ps1Path}"`,
+        { encoding: 'utf8', timeout: 3000 },
+      ).trim()
+      if (result) {
+        this.windowMissingCount = 0
+      } else {
+        this.windowMissingCount++
+        if (this.windowMissingCount >= WINDOW_MISSING_THRESHOLD) {
+          this.ctx.logger.info('desktopBrowser: browser window closed — shutting down dsh')
+          if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
+          if (this.windowPollTimer) clearInterval(this.windowPollTimer)
+          this.heartbeatTimer = null
+          this.windowPollTimer = null
+          process.exit(0)
+        }
+      }
+    } catch {
+      /* non-fatal */
     }
   }
 
@@ -378,37 +419,22 @@ export class DesktopBrowser extends Service {
 
     // Feature 1: close dsh when Web UI tab closes
     if (this.config.closeOnBrowserExit && this.ctx.webServer) {
-      const delay = this.config.closeDelayMs
       try {
-        // Patch frontend: inject heartbeat + pagehide + visibilitychange
         patchFrontend(this.ctx.webServer)
-        this.ctx.logger.info('desktopBrowser: frontend patched — heartbeat + pagehide + visibilitychange active')
+        this.ctx.logger.info('desktopBrowser: frontend patched — heartbeat active')
 
-        // Register /alive (heartbeat) and /quit routes
         this.ctx.webServer.register({
           kind: 'exact',
           path: ALIVE_ROUTE_PATH,
           handler: (_req, res) => {
             this.lastAliveAt = Date.now()
+            this.windowMissingCount = 0
             res.writeHead(204)
             res.end()
           },
         })
-        this.ctx.webServer.register({
-          kind: 'exact',
-          path: QUIT_ROUTE_PATH,
-          handler: (_req, res) => {
-            res.writeHead(204)
-            res.end()
-            setTimeout(() => {
-              this.ctx.logger.info('desktopBrowser: quit requested, shutting down dsh')
-              process.exit(0)
-            }, delay)
-          },
-        })
-        this.ctx.logger.info(`desktopBrowser: alive+quit routes registered`)
 
-        // Heartbeat monitor: exit dsh if no heartbeat for 15 seconds
+        // Heartbeat monitor (fallback)
         this.heartbeatTimer = setInterval(() => {
           const idle = Date.now() - this.lastAliveAt
           if (idle > HEARTBEAT_TIMEOUT_MS) {
@@ -416,10 +442,17 @@ export class DesktopBrowser extends Service {
               `desktopBrowser: no heartbeat for ${Math.round(idle / 1000)}s — shutting down dsh`,
             )
             if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
+            if (this.windowPollTimer) clearInterval(this.windowPollTimer)
             this.heartbeatTimer = null
+            this.windowPollTimer = null
             process.exit(0)
           }
         }, 1000)
+
+        // Window polling (primary, fast detection)
+        this.windowPollTimer = setInterval(() => {
+          this.checkWindowAlive()
+        }, WINDOW_POLL_INTERVAL_MS)
       } catch (err) {
         this.ctx.logger.warn(`desktopBrowser: failed to set up close-on-browser-exit: ${err}`)
       }
