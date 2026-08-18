@@ -183,7 +183,14 @@ const QUIT_ROUTE_PATH = '/api/desktop-browser/quit'
 function patchFrontend(webserver: { tapIndex: (t: (html: string) => string) => () => void }): () => void {
   return webserver.tapIndex((html: string) => {
     if (html.includes(QUIT_SCRIPT_ID)) return html
-    const script = `<script id="${QUIT_SCRIPT_ID}">document.addEventListener("pagehide",()=>{navigator.sendBeacon("${QUIT_ROUTE_PATH}")})</script>`
+    const script = `<script id="${QUIT_SCRIPT_ID}">
+      document.addEventListener("pagehide", function() {
+        navigator.sendBeacon("${QUIT_ROUTE_PATH}")
+      })
+      document.addEventListener("beforeunload", function() {
+        navigator.sendBeacon("${QUIT_ROUTE_PATH}")
+      })
+    </script>`
     return html.replace('</body>', `${script}</body>`)
   })
 }

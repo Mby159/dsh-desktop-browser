@@ -77,7 +77,10 @@ function resolveGeometry(config) {
 function patchFrontend(webserver) {
 	return webserver.tapIndex((html) => {
 		if (html.includes(QUIT_SCRIPT_ID)) return html;
-		const script = `<script id="${QUIT_SCRIPT_ID}">document.addEventListener("pagehide",()=>{navigator.sendBeacon("${QUIT_ROUTE_PATH}")})</script>`;
+		const script = `<script id="${QUIT_SCRIPT_ID}">
+document.addEventListener("pagehide",function(){navigator.sendBeacon("${QUIT_ROUTE_PATH}")})
+document.addEventListener("beforeunload",function(){navigator.sendBeacon("${QUIT_ROUTE_PATH}")})
+</script>`;
 		return html.replace("</body>", `${script}</body>`);
 	});
 }
