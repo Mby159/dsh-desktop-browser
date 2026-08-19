@@ -276,6 +276,48 @@ function createDesktopShortcut(config: ResolvedConfig): void {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Self-check: verify bundle was added to the profile                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Check that this bundle was added to the profile's bundles list.
+ * If reconcilePlugins failed (e.g. pnpm exitCode != 0 on first install),
+ * the plugin is loaded but its cordis.patch.yml is never merged — so
+ * desktop-browser won't appear in --dump-config and the browser won't open.
+ *
+ * Call this at the top of Service.init. When the check fails, log a
+ * clear diagnostic the agent (or human) can understand and act on.
+ */
+function checkBundleRegistered(profileDir: string, logger: { error(msg: string): void }): void {
+  const manifestPath = join(profileDir, 'package.json')
+  if (!existsSync(manifestPath)) {
+    logger.error(
+      `[desktopBrowser] profile package.json not found at ${profileDir}. ` +
+      `Is the web profile initialized? Run: dsh plugin --profile web add @deepseek-ai/dsh-desktop-browser`,
+    )
+    return
+  }
+  let manifest: { dsh?: { profile?: { bundles?: string[] } } }
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  } catch {
+    logger.error(`[desktopBrowser] could not read profile package.json at ${manifestPath}`)
+    return
+  }
+  const bundles: string[] = manifest.dsh?.profile?.bundles ?? []
+  if (!bundles.includes('@deepseek-ai/dsh-desktop-browser')) {
+    logger.error(
+      `[desktop-browser] bundle not found in profile bundles — cordis.patch.yml will not be merged.\n` +
+      `  Profile: ${profileDir}\n` +
+      `  Bundles: [${bundles.join(', ')}]\n` +
+      `  Fix: run: dsh plugin --profile web add @deepseek-ai/dsh-desktop-browser\n` +
+      `  If the first install failed with "allowBuilds", add the key printed by pnpm to\n` +
+      `  ${profileDir}/pnpm-workspace.yaml, then re-run the add command above.`,
+    )
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Service                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -371,6 +413,11 @@ export class DesktopBrowser extends Service {
   }
 
   async [Service.init](): Promise<void> {
+    // Verify the bundle was added to the profile's bundles list.
+    // Fail fast with a clear diagnostic so the agent knows to re-run the install.
+    const profileDir = join(homedir(), '.dsh', 'profiles', 'web')
+    checkBundleRegistered(profileDir, this.ctx.logger)
+
     const host = this.ctx.webServer?.host ?? this.config.url?.match(/^http:\/\/([^\/:]+)/)?.[1] ?? '127.0.0.1'
     const port = this.ctx.webServer?.port ?? Number(this.config.url?.match(/:(\d+)/)?.[1] ?? '3080')
     this.resolvedUrl = `http://${host}:${port}`

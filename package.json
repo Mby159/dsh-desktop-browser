@@ -11,7 +11,7 @@
   },
   "files": ["dist/**", "cordis.patch.yml"],
   "license": "MIT",
-  "scripts": { "build": "tsdown" },
+  "scripts": { "prepare": "tsdown", "build": "tsdown" },
   "dependencies": { "@deepseek-ai/schemastery": "^3.18.1" },
   "peerDependencies": { "@deepseek-ai/cordis": "^4.0.1" },
   "devDependencies": { "tsdown": "^0.22.14", "typescript": "^7.0.2" },
